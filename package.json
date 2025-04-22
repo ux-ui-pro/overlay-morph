@@ -1,6 +1,6 @@
 {
   "name": "overlay-morph",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-layered SVG shape overlays that are dynamically generated with adjustable properties are used in creating transitions in SPA or for designing drawer menus",
   "author": "ux-ui.pro",
   "license": "MIT",
@@ -51,7 +51,7 @@
     "prettier": "3.5.3",
     "rimraf": "6.0.1",
     "typescript": "5.8.2",
-    "vite": "6.2.1",
+    "vite": "6.3.2",
     "vite-plugin-dts": "4.5.3",
     "gsap": "3.12.7"
   },

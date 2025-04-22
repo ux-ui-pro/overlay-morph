@@ -63,14 +63,14 @@ overlayMorph.init();
 
 &#10148; **API**
 
-| Method                  | Description                                                                     |
-|:------------------------|:--------------------------------------------------------------------------------|
-| `init()`                | Initializes the overlay with the given options.                                 |
-| `toggle()`              | Toggles the animation state between opened and closed.                          |
-| `entry()`               | Sets the animation state to open.                                               |
-| `leave()`               | Sets the animation state to closed.                                             |
-| `totalDuration()`       | Returns the total duration of the animation in milliseconds.                    |
-| `destroy()`             | Destroys the overlay instance, cleaning up any created elements and animations. |
+| Method                  | Description                                                                                       |
+|:------------------------|:--------------------------------------------------------------------------------------------------|
+| `init()`                | Initializes the overlay with the given options.                                                   |
+| `toggle()`              | Toggles the animation state between opened and closed. Returns a Promise.                         |
+| `entry()`               | Sets the animation state to open. Returns a Promise that resolves when the animation completes.   |
+| `leave()`               | Sets the animation state to closed. Returns a Promise that resolves when the animation completes. |
+| `totalDuration()`       | Returns the total duration of the animation in milliseconds.                                      |
+| `destroy()`             | Destroys the overlay instance, cleaning up any created elements and animations.                   |
 <br>
 
 &#10148; **License**

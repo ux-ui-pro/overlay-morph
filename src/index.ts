@@ -86,18 +86,15 @@ export default class OverlayMorph {
   #render = (): void => {
     this.#path.forEach((pathEl, i) => {
       const points = this.#allPoints[i];
-
       let d = this.#isOpened ? `M 0 0 V ${points[0]} C` : `M 0 ${points[0]} C`;
 
       for (let j = 0; j < this.#numberPoints - 1; j += 1) {
         const p = ((j + 1) / (this.#numberPoints - 1)) * 100;
         const cp = p - ((1 / (this.#numberPoints - 1)) * 100) / 2;
-
         d += ` ${cp} ${points[j]} ${cp} ${points[j + 1]} ${p} ${points[j + 1]}`;
       }
 
       d += this.#isOpened ? ' V 100 H 0' : ' V 0 H 0';
-
       pathEl.setAttribute('d', d);
     });
   };
@@ -108,8 +105,8 @@ export default class OverlayMorph {
     this.#tl.progress(0).clear();
 
     this.#pointsDelay = Array.from(
-        { length: this.#numberPoints },
-        () => Math.random() * this.#delayPoints,
+      { length: this.#numberPoints },
+      () => Math.random() * this.#delayPoints,
     );
 
     this.#allPoints.forEach((points, i) => {
@@ -121,25 +118,35 @@ export default class OverlayMorph {
     });
   }
 
-  public toggle(): void {
-    if (!this.#tl || this.#tl.isActive()) return;
-
-    this.#isOpened = !this.#isOpened;
-    this.#update();
+  #playWithPromise(): Promise<void> {
+    return new Promise((resolve) => {
+      this.#tl?.eventCallback('onComplete', () => resolve());
+      this.#tl?.play(0);
+    });
   }
 
-  public entry(): void {
-    if (!this.#tl || this.#tl.isActive()) return;
+  public entry(): Promise<void> {
+    if (!this.#tl || this.#tl.isActive()) return Promise.resolve();
 
     this.#isOpened = true;
     this.#update();
+    return this.#playWithPromise();
   }
 
-  public leave(): void {
-    if (!this.#tl || this.#tl.isActive()) return;
+  public leave(): Promise<void> {
+    if (!this.#tl || this.#tl.isActive()) return Promise.resolve();
 
     this.#isOpened = false;
     this.#update();
+    return this.#playWithPromise();
+  }
+
+  public toggle(): Promise<void> {
+    if (!this.#tl || this.#tl.isActive()) return Promise.resolve();
+
+    this.#isOpened = !this.#isOpened;
+    this.#update();
+    return this.#playWithPromise();
   }
 
   public totalDuration(): number {
