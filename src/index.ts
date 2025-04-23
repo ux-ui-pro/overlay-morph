@@ -153,6 +153,12 @@ export default class OverlayMorph {
     return this.#tl ? Math.round(this.#tl.totalDuration() * 1000) : 0;
   }
 
+  public stopTimelineIfActive(): void {
+    if (this.#tl?.isActive()) {
+      this.#tl.kill();
+    }
+  }
+
   public destroy(): void {
     if (this.#tl) {
       this.#gsapInstance.killTweensOf([this.#tl]);
