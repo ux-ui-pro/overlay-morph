@@ -14,7 +14,7 @@ export interface OverlayMorphOptions {
 
 type EaseFn = (t: number) => number;
 
-export type AttrSetter = (v: { d: string }) => void;
+export type AttrSetter = (d: string) => void;
 
 const DEFAULTS = {
   delayPoints: 0.3,
@@ -35,6 +35,7 @@ function safeParseEase(g: typeof gsap, ease: string): EaseFn {
   if (typeof parse === 'function') {
     try {
       const fn = parse(ease);
+
       if (typeof fn === 'function') return fn;
     } catch {}
   }
@@ -50,8 +51,6 @@ export function applyPlatformPerfTweaks(g: typeof gsap = gsap): void {
 
   if (isIOS) g.ticker.lagSmoothing(0);
   else g.ticker.lagSmoothing(500, 33);
-
-  g.ticker.fps(30);
 }
 
 export default class OverlayMorph {
@@ -198,11 +197,16 @@ export default class OverlayMorph {
 
   private initializePaths(): void {
     this.allPoints = this.paths.map(() => new Array<number>(this.numberPoints).fill(100));
-
     this.computeSegments();
 
-    this.attrSetters = this.paths.map((el) => {
-      return this.gsapInstance.quickSetter(el, 'attr') as unknown as AttrSetter;
+    this.attrSetters = this.paths.map((el): AttrSetter => {
+      const setter = this.gsapInstance.quickSetter(el, 'attr') as (vars: { d: string }) => void;
+      const vars: { d: string } = { d: '' };
+
+      return (d: string): void => {
+        vars.d = d;
+        setter(vars);
+      };
     });
   }
 
@@ -227,13 +231,13 @@ export default class OverlayMorph {
 
   private buildPath(points: number[], opened: boolean): string {
     const parts: string[] = [];
-    const p0 = this.round1(points[0]);
+    const p0 = points[0];
 
     parts.push(opened ? `M 0 0 V ${p0} C` : `M 0 ${p0} C`);
 
     for (let j = 0; j < this.numberPoints - 1; j += 1) {
-      const y1 = this.round1(points[j]);
-      const y2 = this.round1(points[j + 1]);
+      const y1 = points[j];
+      const y2 = points[j + 1];
 
       parts.push(` ${this.cp[j]} ${y1} ${this.cp[j]} ${y2} ${this.p[j]} ${y2}`);
     }
@@ -246,34 +250,53 @@ export default class OverlayMorph {
   private render = (): void => {
     if (!this.svg || !this.paths.length) return;
 
+    const tAbsBase = this.progress * this.total;
     const pathsCount = this.paths.length;
 
     for (let i = 0; i < pathsCount; i += 1) {
       const orderIndex = this.isOpened ? i : pathsCount - i - 1;
       const pathDelay = this.delayPaths * orderIndex;
-
       const points = this.allPoints[i];
+
+      let dirty = false;
 
       for (let j = 0; j < this.numberPoints; j += 1) {
         const start = this.pointsDelay[j] + pathDelay;
-        const tAbs = this.progress * this.total - start;
+        const tAbs = tAbsBase - start;
 
-        let y = 100;
-
-        if (tAbs >= 0) {
-          if (tAbs >= this.duration) y = 0;
-          else {
-            const k = tAbs / this.duration;
-            y = 100 * (1 - this.easeFn(k));
+        if (tAbs < 0) {
+          if (points[j] !== 100) {
+            points[j] = 100;
+            dirty = true;
           }
+
+          continue;
         }
 
-        points[j] = y;
+        if (tAbs >= this.duration) {
+          if (points[j] !== 0) {
+            points[j] = 0;
+            dirty = true;
+          }
+
+          continue;
+        }
+
+        const k = tAbs / this.duration;
+        const y = 100 * (1 - this.easeFn(k));
+        const yr = this.round1(y);
+
+        if (points[j] !== yr) {
+          points[j] = yr;
+          dirty = true;
+        }
       }
+
+      if (!dirty) continue;
 
       const d = this.buildPath(points, this.isOpened);
 
-      this.attrSetters[i]?.({ d });
+      this.attrSetters[i]?.(d);
     }
   };
 
@@ -290,10 +313,16 @@ export default class OverlayMorph {
 
     const pathsCount = this.paths.length;
     const maxPathDelay = this.delayPaths * (pathsCount - 1);
-    const maxPointDelay = this.pointsDelay.length ? Math.max(...this.pointsDelay) : 0;
+
+    let maxPointDelay = 0;
+
+    for (let idx = 0; idx < this.pointsDelay.length; idx += 1) {
+      const v = this.pointsDelay[idx];
+
+      if (v > maxPointDelay) maxPointDelay = v;
+    }
 
     this.total = this.duration + maxPathDelay + maxPointDelay;
-
     this.easeFn = safeParseEase(this.gsapInstance, this.ease);
 
     this.tl.to(this, { progress: 1, duration: this.total, ease: 'none' });
