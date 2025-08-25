@@ -9,7 +9,7 @@
 [![GitHub package version](https://img.shields.io/github/package-json/v/ux-ui-pro/overlay-morph.svg)](https://github.com/ux-ui-pro/overlay-morph)
 [![NPM Downloads](https://img.shields.io/npm/dm/overlay-morph.svg?style=flat)](https://www.npmjs.org/package/overlay-morph)
 
-<sup>1.7kB gzipped</sup>
+<sup>2kB gzipped</sup>
 
 <a href="https://codepen.io/ux-ui/full/Jjervqg">Demo</a>
 

@@ -12,7 +12,9 @@ export interface OverlayMorphOptions {
   mobilePointsCap?: number;
 }
 
-type AttrSetter = (v: { d: string }) => void;
+type EaseFn = (t: number) => number;
+
+export type AttrSetter = (v: { d: string }) => void;
 
 const DEFAULTS = {
   delayPoints: 0.3,
@@ -23,6 +25,23 @@ const DEFAULTS = {
 
 const INIT_CLASS_SUFFIX = '--initialize';
 
+const linearEase: EaseFn = (t: number): number => t;
+
+function safeParseEase(g: typeof gsap, ease: string): EaseFn {
+  type GsapWithParse = typeof gsap & { parseEase?: (e: string) => EaseFn };
+
+  const parse = (g as GsapWithParse).parseEase;
+
+  if (typeof parse === 'function') {
+    try {
+      const fn = parse(ease);
+      if (typeof fn === 'function') return fn;
+    } catch {}
+  }
+
+  return linearEase;
+}
+
 export function applyPlatformPerfTweaks(g: typeof gsap = gsap): void {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return;
 
@@ -31,6 +50,8 @@ export function applyPlatformPerfTweaks(g: typeof gsap = gsap): void {
 
   if (isIOS) g.ticker.lagSmoothing(0);
   else g.ticker.lagSmoothing(500, 33);
+
+  g.ticker.fps(30);
 }
 
 export default class OverlayMorph {
@@ -41,16 +62,17 @@ export default class OverlayMorph {
   }
 
   private gsapInstance: typeof gsap = OverlayMorph.gsapNS;
+
   private svg: SVGElement | null = null;
   private paths: SVGPathElement[] = [];
   private attrSetters: AttrSetter[] = [];
   private initClass = '';
+
   private isOpened: boolean;
   private allPoints: number[][] = [];
   private pointsDelay: number[] = [];
   private p: number[] = [];
   private cp: number[] = [];
-
   private tl?: gsap.core.Timeline;
 
   private readonly numberPoints: number;
@@ -60,12 +82,15 @@ export default class OverlayMorph {
   private readonly ease: string;
   private readonly options: OverlayMorphOptions;
 
+  private progress = 0;
+  private total = 0;
+  private easeFn: EaseFn = linearEase;
+
   constructor(options: OverlayMorphOptions) {
     this.options = options;
 
     const isSmallScreen =
       typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches;
-
     const mobileCap = options.mobilePointsCap ?? 4;
     const requested = options.numberPoints ?? (isSmallScreen ? 3 : 4);
     const clamped = Math.max(2, requested);
@@ -107,10 +132,7 @@ export default class OverlayMorph {
     this.pointsDelay = [];
     this.allPoints = [];
 
-    this.tl = this.gsapInstance.timeline({
-      onUpdate: this.render,
-      defaults: { ease: this.ease, duration: this.duration },
-    });
+    this.tl = this.gsapInstance.timeline({ onUpdate: this.render, defaults: { ease: 'none' } });
 
     if (this.svg && this.paths.length > 0) {
       this.initializePaths();
@@ -118,6 +140,60 @@ export default class OverlayMorph {
       this.updateTimeline();
       this.tl.progress(1);
     }
+  }
+
+  public async entry(): Promise<void> {
+    if (!this.tl || this.tl.isActive()) return;
+
+    this.isOpened = true;
+    this.resetAllPointsTo(100);
+    this.updateTimeline();
+
+    await this.playTimeline();
+  }
+
+  public async leave(): Promise<void> {
+    if (!this.tl || this.tl.isActive()) return;
+
+    this.isOpened = false;
+    this.resetAllPointsTo(100);
+    this.updateTimeline();
+
+    await this.playTimeline();
+  }
+
+  public async toggle(): Promise<void> {
+    if (!this.tl || this.tl.isActive()) return;
+
+    this.isOpened = !this.isOpened;
+    this.resetAllPointsTo(100);
+    this.updateTimeline();
+
+    await this.playTimeline();
+  }
+
+  public totalDuration(): number {
+    return this.tl ? Math.round(this.total * 1000) : 0;
+  }
+
+  public stopTimelineIfActive(): void {
+    if (this.tl?.isActive()) this.tl.kill();
+  }
+
+  public destroy(): void {
+    if (this.tl) {
+      this.gsapInstance.killTweensOf([this.tl]);
+      this.tl.kill();
+    }
+
+    if (this.svg && this.initClass) this.svg.classList.remove(this.initClass);
+
+    this.svg = null;
+    this.paths = [];
+    this.pointsDelay = [];
+    this.allPoints = [];
+    this.attrSetters = [];
+    this.tl = undefined;
   }
 
   private initializePaths(): void {
@@ -168,8 +244,34 @@ export default class OverlayMorph {
   }
 
   private render = (): void => {
-    for (let i = 0; i < this.paths.length; i += 1) {
-      const d = this.buildPath(this.allPoints[i], this.isOpened);
+    if (!this.svg || !this.paths.length) return;
+
+    const pathsCount = this.paths.length;
+
+    for (let i = 0; i < pathsCount; i += 1) {
+      const orderIndex = this.isOpened ? i : pathsCount - i - 1;
+      const pathDelay = this.delayPaths * orderIndex;
+
+      const points = this.allPoints[i];
+
+      for (let j = 0; j < this.numberPoints; j += 1) {
+        const start = this.pointsDelay[j] + pathDelay;
+        const tAbs = this.progress * this.total - start;
+
+        let y = 100;
+
+        if (tAbs >= 0) {
+          if (tAbs >= this.duration) y = 0;
+          else {
+            const k = tAbs / this.duration;
+            y = 100 * (1 - this.easeFn(k));
+          }
+        }
+
+        points[j] = y;
+      }
+
+      const d = this.buildPath(points, this.isOpened);
 
       this.attrSetters[i]?.({ d });
     }
@@ -178,6 +280,7 @@ export default class OverlayMorph {
   private updateTimeline(): void {
     if (!this.tl) return;
 
+    this.progress = 0;
     this.tl.progress(0).clear();
 
     this.pointsDelay = Array.from(
@@ -186,20 +289,20 @@ export default class OverlayMorph {
     );
 
     const pathsCount = this.paths.length;
+    const maxPathDelay = this.delayPaths * (pathsCount - 1);
+    const maxPointDelay = this.pointsDelay.length ? Math.max(...this.pointsDelay) : 0;
 
-    this.allPoints.forEach((points, i) => {
-      const pathDelay = this.delayPaths * (this.isOpened ? i : pathsCount - i - 1);
+    this.total = this.duration + maxPathDelay + maxPointDelay;
 
-      this.pointsDelay.forEach((delay, j) => {
-        this.tl!.to(points, { [j]: 0 }, delay + pathDelay);
-      });
-    });
+    this.easeFn = safeParseEase(this.gsapInstance, this.ease);
+
+    this.tl.to(this, { progress: 1, duration: this.total, ease: 'none' });
   }
 
   private async playTimeline(): Promise<void> {
     if (!this.tl) return;
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve): void => {
       this.tl!.eventCallback('onComplete', () => resolve());
       this.tl!.play(0);
     });
@@ -211,59 +314,5 @@ export default class OverlayMorph {
 
       for (let j = 0; j < arr.length; j += 1) arr[j] = value;
     }
-  }
-
-  public async entry(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = true;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
-  }
-
-  public async leave(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = false;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
-  }
-
-  public async toggle(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = !this.isOpened;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
-  }
-
-  public totalDuration(): number {
-    return this.tl ? Math.round(this.tl.totalDuration() * 1000) : 0;
-  }
-
-  public stopTimelineIfActive(): void {
-    if (this.tl?.isActive()) this.tl.kill();
-  }
-
-  public destroy(): void {
-    if (this.tl) {
-      this.gsapInstance.killTweensOf([this.tl]);
-      this.tl.kill();
-    }
-
-    if (this.svg && this.initClass) this.svg.classList.remove(this.initClass);
-
-    this.svg = null;
-    this.paths = [];
-    this.pointsDelay = [];
-    this.allPoints = [];
-    this.attrSetters = [];
-    this.tl = undefined;
   }
 }
