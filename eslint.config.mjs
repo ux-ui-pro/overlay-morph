@@ -1,5 +1,4 @@
 import globals from 'globals';
-import eslintPlugin from '@eslint/js';
 import typescriptPlugin from '@typescript-eslint/eslint-plugin';
 import typescriptParser from '@typescript-eslint/parser';
 import prettierConfig from 'eslint-config-prettier';
@@ -8,45 +7,7 @@ import importPlugin from 'eslint-plugin-import';
 /** @type {import("eslint").Linter.FlatConfig[]} */
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**'],
-  },
-  {
-    files: ['**/*.js'],
-    languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      globals: {
-        ...globals.browser,
-        ...globals.es2022,
-      },
-    },
-    plugins: {
-      eslint: eslintPlugin,
-      import: importPlugin,
-    },
-    rules: {
-      ...eslintPlugin.configs.recommended.rules,
-      'import/order': [
-        'error',
-        {
-          groups: [['builtin', 'external', 'internal']],
-          'newlines-between': 'always',
-        },
-      ],
-      'import/no-unresolved': 'error',
-      'import/no-duplicates': 'error',
-      'max-len': [
-        'error',
-        {
-          code: 100,
-          ignoreUrls: true,
-          ignoreStrings: true,
-          ignoreTemplateLiterals: true,
-          ignoreComments: true,
-        },
-      ],
-      'linebreak-style': ['error', 'unix'],
-    },
+    ignores: ['node_modules', 'dist'],
   },
   {
     files: ['**/*.ts'],
@@ -58,15 +19,13 @@ export default [
         project: './tsconfig.json',
       },
       globals: {
-        gsap: 'readonly',
-        CustomEase: 'readonly',
         ...globals.browser,
         ...globals.es2022,
+        geoip2: 'readonly',
       },
     },
     plugins: {
       '@typescript-eslint': typescriptPlugin,
-      eslint: eslintPlugin,
       import: importPlugin,
     },
     settings: {
@@ -77,7 +36,6 @@ export default [
       },
     },
     rules: {
-      ...eslintPlugin.configs.recommended.rules,
       ...typescriptPlugin.configs.recommended.rules,
       ...typescriptPlugin.configs['recommended-requiring-type-checking'].rules,
       '@typescript-eslint/no-unused-vars': 'error',

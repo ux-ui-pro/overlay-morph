@@ -15,7 +15,7 @@ export default defineConfig({
     lib: {
       entry: 'src/index.ts',
       name: 'OverlayMorph',
-      formats: ['es', 'cjs', 'umd'],
+      formats: ['es', 'cjs'],
       fileName: (format) => `index.${format}.js`,
     },
     emptyOutDir: true,
@@ -32,7 +32,7 @@ export default defineConfig({
           },
           mangle: {
             toplevel: true,
-            keep_fnames: false,
+            reserved: ['OverlayMorph', 'applyPlatformPerfTweaks'],
           },
           format: {
             comments: false,
@@ -40,15 +40,9 @@ export default defineConfig({
         }),
       ],
       output: {
-        globals: {
-          gsap: 'gsap',
-        },
         assetFileNames: 'index.[ext]',
+        exports: 'named',
       },
     },
-  },
-  server: {
-    open: true,
-    port: 3000,
   },
 });
