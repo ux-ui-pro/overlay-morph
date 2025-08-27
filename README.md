@@ -24,70 +24,71 @@ yarn add overlay-morph
 <br>
 
 ➠ **Import**
-```javascript
+```ts
 import { gsap } from 'gsap';
-import OverlayMorph, { applyPlatformPerfTweaks } from 'overlay-morph';
+import OverlayMorph from 'overlay-morph';
 ```
 <br>
 
 ➠ **Usage**
-```javascript
-// Optional: register a custom GSAP instance (e.g., when using GSAP from a different bundle)
-OverlayMorph.registerGSAP(gsap);
-
-// Optional: apply platform performance tweaks globally (init() applies tweaks automatically as well)
-applyPlatformPerfTweaks(gsap);
-
+```ts
 const overlayMorph = new OverlayMorph({
   svgEl: '.svg',
   pathEl: '.svg path',
-  ease: 'power2.inOut',
+  ease: 'power1.inOut',
   isOpened: false,
-  numberPoints: 5,
+  numberPoints: 6,
   delayPoints: 0.3,
   delayPaths: 0.25,
   duration: 1.5,
-  mobilePointsCap: 4,
+  mobilePointsCap: 3,
+
+  // Performance/quality tuning (optional)
+  precision: 0.1,
+  lutSamples: 64,
+  useLUT: true,
+  renderStride: 1,
 });
 
 overlayMorph.init();
+
+// later
+await overlayMorph.entry();
+await overlayMorph.leave();
+await overlayMorph.toggle();
 ```
 <br>
 
 ➠ **Options**
 
-| Option             |              Type               | Default                         | Description                                                                                                                                                                                                 |
-|:-------------------|:-------------------------------:|:-------------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `svgEl`            |  `string` &#124; `SVGElement`   |            **required**         | **Required.** SVG container selector or element node.                                                                                                                                                        |
-| `pathEl`           |            `string`             |            **required**         | **Required.** Selector for the `<path>` elements inside the SVG container.                                                                                                                                  |
-| `numberPoints`     |            `number`             | Desktop: `4`, Mobile: `3`       | Number of animation points on each path. Minimum is `2`. On small screens (`max-width: 767px`) the requested value is clamped by `mobilePointsCap`.                                                         |
-| `delayPoints`      |            `number`             |              `0.3`              | Delay between animation of each point on a path.                                                                                                                                                            |
-| `delayPaths`       |            `number`             |              `0.25`             | Delay between animation of each path.                                                                                                                                                                       |
-| `duration`         |            `number`             |               `1`               | Duration of the animation.                                                                                                                                                                                  |
-| `ease`             |            `string`             |             `'none'`            | Timing function. See [GSAP easing](https://greensock.com/docs/v3/Eases).                                                                                                                                    |
-| `isOpened`         |           `boolean`             |              `false`            | Whether the overlay starts in an opened (`true`) or closed (`false`) state. The `toggle()`, `entry()`, and `leave()` methods can be used to change the state dynamically.                                   |
-| `mobilePointsCap`  |            `number`             |               `4`               | Maximum allowed value for `numberPoints` on small screens. Has no effect on larger screens.                                                                                                                 |
+| Option             |              Type               | Default                                | Description                                                                                                                                                                                                 |
+|:-------------------|:-------------------------------:|:--------------------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `svgEl`            |  `string` &#124; `SVGElement`   |            **required**                | **Required.** SVG container selector or element node.                                                                                                                                                        |
+| `pathEl`           |            `string`             |            **required**                | **Required.** Selector for the `<path>` elements inside the SVG container.                                                                                                                                  |
+| `numberPoints`     |            `number`             | Desktop: `4`, Mobile: `3`              | Number of animation points on each path (min `2`). On small screens (`max-width: 991px`) the requested value is clamped by `mobilePointsCap`.                                                               |
+| `delayPoints`      |            `number`             |                 `0.3`                  | Max random delay per point (quantized to frame).                                                                                                                                                             |
+| `delayPaths`       |            `number`             |                 `0.25`                 | Delay between animation of each path.                                                                                                                                                                       |
+| `duration`         |            `number`             |                  `1`                   | Duration of point animation segment.                                                                                                                                                                        |
+| `ease`             |            `string`             |               `'none'`                 | Timing function. See [GSAP easing](https://greensock.com/docs/v3/Eases).                                                                                                                                    |
+| `isOpened`         |           `boolean`             |                 `false`                | Initial state. Use `toggle()`, `entry()`, `leave()` to change it at runtime.                                                                                                                                |
+| `mobilePointsCap`  |            `number`             |                  `3`                   | Maximum allowed value for `numberPoints` on small screens.                                                                                                                                                  |
+| `precision`        |            `number`             | iOS: `0.2`, others: `0.1`              | Y rounding step in percent; internally snapped to **tenths of percent** (0.1%). Values below `0.1` behave like `0.1`.                                                                                      |
+| `lutSamples`       |            `number`             |                  `64`                  | Samples for the ease LUT, when `useLUT` is enabled.                                                                                                                                                         |
+| `useLUT`           |           `boolean`             | iOS: `true`, others: `false`           | Enables LUT-based easing evaluation (reduces per-frame cost on mobile Safari).                                                                                                                              |
+| `renderStride`     |            `number`             |                  `1`                   | Render every Nth update (integer ≥ `1`). Use `2` to halve update frequency (approx. 30fps).                                                                                                                |
 <br>
 
 ➠ **API**
 
-| Method                     | Description                                                                                       |
-|:---------------------------|:--------------------------------------------------------------------------------------------------|
-| `init()`                   | Initializes the overlay with the given options.                                                   |
-| `toggle()`                 | Toggles the animation state between opened and closed. Returns a `Promise<void>`.                 |
-| `entry()`                  | Sets the animation state to open. Returns a `Promise<void>` that resolves when the animation completes. |
-| `leave()`                  | Sets the animation state to closed. Returns a `Promise<void>` that resolves when the animation completes. |
-| `totalDuration()`          | Returns the total duration of the animation in milliseconds.                                      |
-| `stopTimelineIfActive()`   | Stops the current animation timeline if active. Useful for cancelling or resetting animations.    |
-| `destroy()`                | Destroys the overlay instance, cleaning up any created elements, setters, and animations.          |
-| `registerGSAP(gsap)`      | *(static)* Registers a GSAP instance to be used internally.                                       |
-<br>
-
-➠ **Performance**
-
-- `applyPlatformPerfTweaks()` adjusts GSAP's ticker lag smoothing to improve frame pacing on iOS devices and other platforms.
-- You can call it manually with a GSAP instance, but `init()` already applies these tweaks internally.
-
+| Method                   | Description                                                                                             |
+|:-------------------------|:--------------------------------------------------------------------------------------------------------|
+| `init()`                 | Initializes the overlay with the given options. Idempotent.                                             |
+| `toggle()`               | Toggles between opened/closed. Returns a `Promise<void>` resolved on animation complete.                |
+| `entry()`                | Opens the overlay. Returns a `Promise<void>` resolved on animation complete.                            |
+| `leave()`                | Closes the overlay. Returns a `Promise<void>` resolved on animation complete.                           |
+| `totalDuration()`        | Returns the total duration of the current timeline in **milliseconds**.                                 |
+| `stopTimelineIfActive()` | Stops the current animation timeline if active. Useful for cancelling or resetting animations.          |
+| `destroy()`              | Cleans up all setters, callbacks, and the timeline.                                                     |
 <br>
 
 ➠ **License**

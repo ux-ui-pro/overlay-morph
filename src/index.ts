@@ -10,169 +10,141 @@ export interface OverlayMorphOptions {
   ease?: string;
   isOpened?: boolean;
   mobilePointsCap?: number;
+  precision?: number;
+  lutSamples?: number;
+  useLUT?: boolean;
+  renderStride?: number;
 }
 
 type EaseFn = (t: number) => number;
 
-export type AttrSetter = (d: string) => void;
+const MOBILE_MEDIA = '(max-width: 991px)';
 
 const DEFAULTS = {
   delayPoints: 0.3,
   delayPaths: 0.25,
   duration: 1,
   ease: 'none',
-} as const;
+} satisfies Required<Pick<OverlayMorphOptions, 'delayPoints' | 'delayPaths' | 'duration' | 'ease'>>;
 
-const INIT_CLASS_SUFFIX = '--initialize';
+const PCT_MAX = 100;
+const PCT10_MAX = 1000;
 
-const linearEase: EaseFn = (t: number): number => t;
-
-function safeParseEase(g: typeof gsap, ease: string): EaseFn {
-  type GsapWithParse = typeof gsap & { parseEase?: (e: string) => EaseFn };
-
-  const parse = (g as GsapWithParse).parseEase;
-
-  if (typeof parse === 'function') {
-    try {
-      const fn = parse(ease);
-
-      if (typeof fn === 'function') return fn;
-    } catch {}
-  }
-
-  return linearEase;
-}
-
-export function applyPlatformPerfTweaks(g: typeof gsap = gsap): void {
-  if (typeof navigator === 'undefined' || typeof window === 'undefined') return;
+const isIOSPlatform = (): boolean => {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;
 
   const ua = navigator.userAgent;
-  const isIOS = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in window);
 
-  if (isIOS) g.ticker.lagSmoothing(0);
-  else g.ticker.lagSmoothing(500, 33);
-}
+  return /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in window);
+};
+
+const y10ToStr = (v10: number): string =>
+  v10 % 10 === 0 ? String(v10 / 10) : (v10 / 10).toFixed(1);
 
 export default class OverlayMorph {
-  private static gsapNS: typeof gsap = gsap;
-
-  public static registerGSAP(gsapInstance: typeof gsap): void {
-    OverlayMorph.gsapNS = gsapInstance;
-  }
-
-  private gsapInstance: typeof gsap = OverlayMorph.gsapNS;
+  private gsap = gsap;
 
   private svg: SVGElement | null = null;
   private paths: SVGPathElement[] = [];
-  private attrSetters: AttrSetter[] = [];
-  private initClass = '';
+  private setters: Array<((v: { d: string }) => void) | null> = [];
+  private prevD: string[] = [];
 
-  private isOpened: boolean;
-  private allPoints: number[][] = [];
-  private pointsDelay: number[] = [];
-  private p: number[] = [];
-  private cp: number[] = [];
   private tl?: gsap.core.Timeline;
 
-  private readonly numberPoints: number;
+  private isOpened: boolean;
+  private readonly pointsCount: number;
   private readonly delayPoints: number;
   private readonly delayPaths: number;
   private readonly duration: number;
-  private readonly ease: string;
-  private readonly options: OverlayMorphOptions;
+
+  private readonly easeFn: EaseFn;
 
   private progress = 0;
-  private total = 0;
-  private easeFn: EaseFn = linearEase;
+  private pointsDelay: number[] = [];
 
-  constructor(options: OverlayMorphOptions) {
-    this.options = options;
+  private readonly precision: number;
+  private readonly snapStep10: number;
+  private readonly renderStride: number;
+  private frameCounter = 0;
 
-    const isSmallScreen =
-      typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches;
-    const mobileCap = options.mobilePointsCap ?? 4;
-    const requested = options.numberPoints ?? (isSmallScreen ? 3 : 4);
-    const clamped = Math.max(2, requested);
+  private readonly useLUT: boolean;
+  private readonly lutSamples: number;
+  private easeLUT: Float32Array = new Float32Array(0);
 
-    this.numberPoints = isSmallScreen ? Math.min(clamped, mobileCap) : clamped;
+  constructor(private readonly options: OverlayMorphOptions) {
+    const isSmall = typeof window !== 'undefined' && !!window.matchMedia?.(MOBILE_MEDIA).matches;
+
+    const requested = options.numberPoints ?? (isSmall ? 3 : 4);
+    const mobileCap = Math.max(2, (options.mobilePointsCap ?? 3) | 0);
+    const clamped = Math.max(2, requested | 0);
+
+    this.pointsCount = isSmall ? Math.min(clamped, mobileCap) : clamped;
 
     this.delayPoints = options.delayPoints ?? DEFAULTS.delayPoints;
     this.delayPaths = options.delayPaths ?? DEFAULTS.delayPaths;
     this.duration = options.duration ?? DEFAULTS.duration;
-    this.ease = options.ease ?? DEFAULTS.ease;
     this.isOpened = options.isOpened ?? false;
+
+    const onIOS = isIOSPlatform();
+
+    this.precision = options.precision ?? (onIOS ? 0.2 : 0.1);
+    this.snapStep10 = Math.max(1, Math.round(this.precision * 10));
+    this.renderStride = Math.max(1, Math.round(options.renderStride ?? 1));
+    this.useLUT = options.useLUT ?? onIOS;
+    this.lutSamples = Math.max(8, (options.lutSamples ?? 64) | 0);
+
+    const easeName = options.ease ?? DEFAULTS.ease;
+
+    this.easeFn = (this.gsap.parseEase?.(easeName) as EaseFn) ?? ((t: number): number => t);
   }
 
   public init(): void {
-    const { svgEl, pathEl, isOpened = false } = this.options;
+    if (this.tl) this.destroy();
 
-    if (!OverlayMorph.gsapNS && typeof window !== 'undefined') {
-      OverlayMorph.gsapNS = (window as Window & { gsap?: typeof gsap }).gsap!;
-    }
+    const { svgEl, pathEl } = this.options;
 
-    this.gsapInstance = OverlayMorph.gsapNS;
+    const doc: Document | null = typeof document !== 'undefined' ? document : null;
 
-    applyPlatformPerfTweaks(this.gsapInstance);
+    this.svg =
+      typeof svgEl === 'string' ? (doc ? doc.querySelector<SVGElement>(svgEl) : null) : svgEl;
 
-    this.svg = typeof svgEl === 'string' ? document.querySelector<SVGElement>(svgEl) : svgEl;
+    if (!this.svg) return;
 
-    if (this.svg) {
-      this.paths = Array.from(this.svg.querySelectorAll<SVGPathElement>(pathEl) ?? []);
+    this.paths = Array.from(this.svg.querySelectorAll<SVGPathElement>(pathEl) ?? []);
 
-      const baseClass =
-        typeof svgEl === 'string'
-          ? svgEl.replace(/\./g, '')
-          : (this.svg.classList[0] ?? 'overlay-svg');
+    if (!this.paths.length) return;
 
-      this.initClass = `${baseClass}${INIT_CLASS_SUFFIX}`;
-      this.svg.classList.add(this.initClass);
-    }
+    this.setters = this.paths.map((el) => {
+      const setter = this.gsap.quickSetter(el, 'attr') as (vars: { d: string }) => void;
 
-    this.pointsDelay = [];
-    this.allPoints = [];
+      return typeof setter === 'function' ? setter : null;
+    });
 
-    this.tl = this.gsapInstance.timeline({ onUpdate: this.render, defaults: { ease: 'none' } });
+    this.prevD = new Array<string>(this.paths.length).fill('');
+    this.tl = this.gsap.timeline({ defaults: { ease: 'none' }, onUpdate: this.render });
 
-    if (this.svg && this.paths.length > 0) {
-      this.initializePaths();
-      this.isOpened = isOpened;
-      this.updateTimeline();
-      this.tl.progress(1);
-    }
+    this.randomizePointDelays();
+
+    if (this.useLUT) this.buildEaseLUT();
+
+    this.updateTimeline();
+    this.tl.progress(1);
   }
 
-  public async entry(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = true;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
+  public entry(): Promise<void> {
+    return this.transitionTo(true);
   }
 
-  public async leave(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = false;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
+  public leave(): Promise<void> {
+    return this.transitionTo(false);
   }
 
-  public async toggle(): Promise<void> {
-    if (!this.tl || this.tl.isActive()) return;
-
-    this.isOpened = !this.isOpened;
-    this.resetAllPointsTo(100);
-    this.updateTimeline();
-
-    await this.playTimeline();
+  public toggle(): Promise<void> {
+    return this.transitionTo(!this.isOpened);
   }
 
   public totalDuration(): number {
-    return this.tl ? Math.round(this.total * 1000) : 0;
+    return this.tl ? Math.round(this.tl.duration() * 1000) : 0;
   }
 
   public stopTimelineIfActive(): void {
@@ -180,168 +152,178 @@ export default class OverlayMorph {
   }
 
   public destroy(): void {
-    if (this.tl) {
-      this.gsapInstance.killTweensOf([this.tl]);
-      this.tl.kill();
-    }
+    if (this.tl) this.tl.eventCallback('onComplete', null);
 
-    if (this.svg && this.initClass) this.svg.classList.remove(this.initClass);
-
-    this.svg = null;
-    this.paths = [];
-    this.pointsDelay = [];
-    this.allPoints = [];
-    this.attrSetters = [];
+    this.tl?.kill();
     this.tl = undefined;
+    this.paths = [];
+    this.setters = [];
+    this.prevD = [];
+    this.svg = null;
   }
 
-  private initializePaths(): void {
-    this.allPoints = this.paths.map(() => new Array<number>(this.numberPoints).fill(100));
-    this.computeSegments();
+  private transitionTo(opened: boolean): Promise<void> {
+    if (!this.tl || this.tl.isActive()) return Promise.resolve();
 
-    this.attrSetters = this.paths.map((el): AttrSetter => {
-      const setter = this.gsapInstance.quickSetter(el, 'attr') as (vars: { d: string }) => void;
-      const vars: { d: string } = { d: '' };
+    this.isOpened = opened;
+    this.randomizePointDelays();
 
-      return (d: string): void => {
-        vars.d = d;
-        setter(vars);
+    if (this.useLUT) this.buildEaseLUT();
+
+    this.updateTimeline();
+
+    return new Promise<void>((resolve): void => {
+      const tl = this.tl!;
+
+      const done = (): void => {
+        tl.eventCallback('onComplete', null);
+
+        resolve();
       };
+
+      tl.eventCallback('onComplete', done);
+      tl.play(0);
     });
   }
 
-  private computeSegments(): void {
-    this.p = [];
-    this.cp = [];
+  private randomizePointDelays(): void {
+    const frame = 1 / 60;
+    const quant = (v: number): number => Math.round(v / frame) * frame;
 
-    const step = 100 / (this.numberPoints - 1);
+    const n = this.pointsCount;
+    const arr = new Array<number>(n);
 
-    for (let j = 0; j < this.numberPoints - 1; j += 1) {
+    for (let i = 0; i < n; i += 1) {
+      arr[i] = quant(Math.random() * this.delayPoints);
+    }
+
+    this.pointsDelay = arr;
+  }
+
+  private updateTimeline(): void {
+    if (!this.tl) return;
+
+    const maxPointDelay = this.pointsDelay.length ? Math.max(...this.pointsDelay) : 0;
+    const maxPathDelay = this.delayPaths * Math.max(this.paths.length - 1, 0);
+    const total = this.duration + maxPointDelay + maxPathDelay;
+
+    this.progress = 0;
+    this.frameCounter = 0;
+    this.tl.progress(0).clear();
+    this.tl.to(this, { progress: 1, duration: total, ease: 'none' });
+  }
+
+  private buildEaseLUT(): void {
+    const S = this.lutSamples;
+
+    if (!this.easeFn || S < 8) {
+      this.easeLUT = new Float32Array(0);
+
+      return;
+    }
+
+    const lut = new Float32Array(S + 1);
+
+    for (let i = 0; i <= S; i += 1) {
+      const k = i / S;
+
+      lut[i] = 1 - this.easeFn(k);
+    }
+
+    this.easeLUT = lut;
+  }
+
+  private easeLUTSample(k: number): number {
+    const lut = this.easeLUT;
+    const len = lut.length;
+
+    if (len === 0) return 1 - this.easeFn(k);
+    if (k <= 0) return lut[0];
+    if (k >= 1) return lut[len - 1];
+
+    const f = k * (len - 1);
+    const i = f | 0;
+    const t = f - i;
+
+    const a = lut[i];
+    const b = lut[i + 1 < len ? i + 1 : i];
+
+    return a + (b - a) * t;
+  }
+
+  private buildPathFromY10(ys10: number[], opened: boolean): string {
+    const step = PCT_MAX / (this.pointsCount - 1);
+
+    let d = opened ? `M 0 0 V ${y10ToStr(ys10[0])} C` : `M 0 ${y10ToStr(ys10[0])} C`;
+
+    for (let j = 0; j < this.pointsCount - 1; j++) {
       const end = (j + 1) * step;
       const ctrl = end - step / 2;
 
-      this.p.push(end);
-      this.cp.push(ctrl);
-    }
-  }
-
-  private round1(n: number): number {
-    return Math.round(n * 10) / 10;
-  }
-
-  private buildPath(points: number[], opened: boolean): string {
-    const parts: string[] = [];
-    const p0 = points[0];
-
-    parts.push(opened ? `M 0 0 V ${p0} C` : `M 0 ${p0} C`);
-
-    for (let j = 0; j < this.numberPoints - 1; j += 1) {
-      const y1 = points[j];
-      const y2 = points[j + 1];
-
-      parts.push(` ${this.cp[j]} ${y1} ${this.cp[j]} ${y2} ${this.p[j]} ${y2}`);
+      d +=
+        ` ${ctrl} ${y10ToStr(ys10[j])}` +
+        ` ${ctrl} ${y10ToStr(ys10[j + 1])}` +
+        ` ${end} ${y10ToStr(ys10[j + 1])}`;
     }
 
-    parts.push(opened ? ' V 100 H 0' : ' V 0 H 0');
+    d += opened ? ' V 100 H 0' : ' V 0 H 0';
 
-    return parts.join('');
+    return d;
   }
 
   private render = (): void => {
-    if (!this.svg || !this.paths.length) return;
+    if (!this.svg || !this.paths.length || !this.tl) return;
 
-    const tAbsBase = this.progress * this.total;
+    if (this.renderStride > 1) {
+      this.frameCounter++;
+
+      if (this.frameCounter % this.renderStride !== 0) return;
+    }
+
+    const totalDur = this.tl.duration();
+    const p = this.progress;
     const pathsCount = this.paths.length;
+    const snap10 = this.snapStep10;
 
-    for (let i = 0; i < pathsCount; i += 1) {
-      const orderIndex = this.isOpened ? i : pathsCount - i - 1;
+    for (let i = 0; i < pathsCount; i++) {
+      const orderIndex = this.isOpened ? i : pathsCount - 1 - i;
       const pathDelay = this.delayPaths * orderIndex;
-      const points = this.allPoints[i];
 
-      let dirty = false;
+      const ys10 = new Array<number>(this.pointsCount);
 
-      for (let j = 0; j < this.numberPoints; j += 1) {
-        const start = this.pointsDelay[j] + pathDelay;
-        const tAbs = tAbsBase - start;
+      for (let j = 0; j < this.pointsCount; j++) {
+        const tAbs = p * totalDur - (this.pointsDelay[j] + pathDelay);
 
-        if (tAbs < 0) {
-          if (points[j] !== 100) {
-            points[j] = 100;
-            dirty = true;
-          }
+        if (tAbs <= 0) {
+          ys10[j] = PCT10_MAX;
 
           continue;
         }
 
         if (tAbs >= this.duration) {
-          if (points[j] !== 0) {
-            points[j] = 0;
-            dirty = true;
-          }
+          ys10[j] = 0;
 
           continue;
         }
 
         const k = tAbs / this.duration;
-        const y = 100 * (1 - this.easeFn(k));
-        const yr = this.round1(y);
+        const easedInv = this.useLUT ? this.easeLUTSample(k) : 1 - this.easeFn(k);
 
-        if (points[j] !== yr) {
-          points[j] = yr;
-          dirty = true;
-        }
+        const raw10 = Math.round(PCT10_MAX * easedInv);
+
+        ys10[j] = Math.round(raw10 / snap10) * snap10;
       }
 
-      if (!dirty) continue;
+      const d = this.buildPathFromY10(ys10, this.isOpened);
 
-      const d = this.buildPath(points, this.isOpened);
+      if (d !== this.prevD[i]) {
+        this.prevD[i] = d;
 
-      this.attrSetters[i]?.(d);
+        const setter = this.setters[i];
+
+        if (setter) setter({ d });
+        else this.paths[i].setAttribute('d', d);
+      }
     }
   };
-
-  private updateTimeline(): void {
-    if (!this.tl) return;
-
-    this.progress = 0;
-    this.tl.progress(0).clear();
-
-    this.pointsDelay = Array.from(
-      { length: this.numberPoints },
-      () => Math.random() * this.delayPoints,
-    );
-
-    const pathsCount = this.paths.length;
-    const maxPathDelay = this.delayPaths * (pathsCount - 1);
-
-    let maxPointDelay = 0;
-
-    for (let idx = 0; idx < this.pointsDelay.length; idx += 1) {
-      const v = this.pointsDelay[idx];
-
-      if (v > maxPointDelay) maxPointDelay = v;
-    }
-
-    this.total = this.duration + maxPathDelay + maxPointDelay;
-    this.easeFn = safeParseEase(this.gsapInstance, this.ease);
-
-    this.tl.to(this, { progress: 1, duration: this.total, ease: 'none' });
-  }
-
-  private async playTimeline(): Promise<void> {
-    if (!this.tl) return;
-
-    await new Promise<void>((resolve): void => {
-      this.tl!.eventCallback('onComplete', () => resolve());
-      this.tl!.play(0);
-    });
-  }
-
-  private resetAllPointsTo(value: number): void {
-    for (let i = 0; i < this.allPoints.length; i += 1) {
-      const arr = this.allPoints[i];
-
-      for (let j = 0; j < arr.length; j += 1) arr[j] = value;
-    }
-  }
 }
